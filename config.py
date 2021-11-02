@@ -1,6 +1,6 @@
 __author__ = "Jie Lei"
 
-import os
+import os, shutil
 import time
 import torch
 import argparse
@@ -15,7 +15,7 @@ class BaseOptions(object):
 
     def initialize(self):
         self.parser.add_argument("--debug", action="store_true", help="debug mode, break all loops")
-        self.parser.add_argument("--results_dir_base", type=str, default="results/results")
+        self.parser.add_argument("--results_dir_base", type=str, default="results/")
         self.parser.add_argument("--log_freq", type=int, default=400, help="print, save training info")
         self.parser.add_argument("--lr", type=float, default=3e-4, help="learning rate")
         self.parser.add_argument("--wd", type=float, default=1e-5, help="weight decay")
@@ -30,7 +30,7 @@ class BaseOptions(object):
 
         # model config
         self.parser.add_argument("--no_glove", action="store_true", help="not use glove vectors")
-        self.parser.add_argument("--no_ts", action="store_true", help="no timestep annotation, use full length feature")
+        self.parser.add_argument("--no_ts", action="store_true", default=True, help="no timestep annotation, use full length feature")
         self.parser.add_argument("--input_streams", type=str, nargs="+", choices=["vcpt", "sub", "imagenet"],
                                  help="input streams for the model, will use both `vcpt` and `sub` streams")
         self.parser.add_argument("--n_layers_cls", type=int, default=1, help="number of layers in classifier")
@@ -42,27 +42,33 @@ class BaseOptions(object):
         self.parser.add_argument("--max_vid_l", type=int, default=480, help="max length for video feature")
         self.parser.add_argument("--vocab_size", type=int, default=0, help="vocabulary size")
         self.parser.add_argument("--no_normalize_v", action="store_true", help="do not normalize video featrue")
+        # kwon added
+        self.parser.add_argument("--multihead", type=int, default=4, help="number of multihead")
+        self.parser.add_argument("--exp_name", type=str, default='ABC', help="model name")
+        self.parser.add_argument("--prior", type=str, default='categorical', choices=["categorical", "bernoulli", "bernoulli_1", "None"], help="model name")
+        self.parser.add_argument("--ber_prior", type=float, default=0.5, help="prior probability for bernoulli distribution")
+        self.parser.add_argument("--lambda_val", type=float, default=1.0, help="lambda for prior")
 
         # path config
-        self.parser.add_argument("--train_path", type=str, default="./data/tvqa_train_processed.json",
+        self.parser.add_argument("--train_path", type=str, default="/data/TVQA_uncompressed/tvqa_train_processed.json",
                                  help="train set path")
-        self.parser.add_argument("--valid_path", type=str, default="./data/tvqa_val_processed.json",
+        self.parser.add_argument("--valid_path", type=str, default="/data/TVQA_uncompressed/tvqa_val_processed.json",
                                  help="valid set path")
-        self.parser.add_argument("--test_path", type=str, default="./data/tvqa_test_public_processed.json",
+        self.parser.add_argument("--test_path", type=str, default="/data/TVQA_uncompressed/tvqa_test_public_processed.json",
                                  help="test set path")
-        self.parser.add_argument("--glove_path", type=str, default="./data/glove.6B.300d.txt",
+        self.parser.add_argument("--glove_path", type=str, default="/data/TVQA_uncompressed/glove.6B.300d.txt",
                                  help="GloVe pretrained vector path")
-        self.parser.add_argument("--vcpt_path", type=str, default="./data/det_visual_concepts_hq.pickle",
+        self.parser.add_argument("--vcpt_path", type=str, default="/data/TVQA_uncompressed/det_visual_concepts_hq.pickle",
                                  help="visual concepts feature path")
-        self.parser.add_argument("--vid_feat_path", type=str, default="./data/tvqa_imagenet_pool5.h5",
+        self.parser.add_argument("--vid_feat_path", type=str, default="/data/TVQA_uncompressed/tvqa_imagenet_pool5_hq.h5",
                                  help="imagenet feature path")
         self.parser.add_argument("--vid_feat_size", type=int, default=2048,
                                  help="visual feature dimension")
-        self.parser.add_argument("--word2idx_path", type=str, default="./cache/word2idx.pickle",
+        self.parser.add_argument("--word2idx_path", type=str, default="./data/cache/word2idx.pickle",
                                  help="word2idx cache path")
-        self.parser.add_argument("--idx2word_path", type=str, default="./cache/idx2word.pickle",
+        self.parser.add_argument("--idx2word_path", type=str, default="./data/cache/idx2word.pickle",
                                  help="idx2word cache path")
-        self.parser.add_argument("--vocab_embedding_path", type=str, default="./cache/vocab_embedding.pickle",
+        self.parser.add_argument("--vocab_embedding_path", type=str, default="./data/cache/vocab_embedding.pickle",
                                  help="vocab_embedding cache path")
         self.initialized = True
 
@@ -85,15 +91,17 @@ class BaseOptions(object):
         if not self.initialized:
             self.initialize()
         opt = self.parser.parse_args()
-        results_dir = opt.results_dir_base + time.strftime("_%Y_%m_%d_%H_%M_%S")
+        results_dir = opt.results_dir_base + opt.exp_name  # + time.strftime("_%Y_%m_%d_%H_%M_%S")
 
         if isinstance(self, TestOptions):
             options = load_json(os.path.join("results", opt.model_dir, "opt.json"))
             for arg in options:
                 setattr(opt, arg, options[arg])
         else:
+            if os.path.exists(results_dir):
+                shutil.rmtree(results_dir)
+            os.mkdir(results_dir)
 
-            os.makedirs(results_dir)
             self.display_save(opt, results_dir)
 
         opt.normalize_v = not opt.no_normalize_v

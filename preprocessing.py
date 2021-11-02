@@ -249,22 +249,24 @@ def process_qa(qa_path, processed_srt, frame_base_path, frame_cnt_cache_path, sa
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="./data", help="data dir path")
-    parser.add_argument("--frm_dir", type=str,
+    parser.add_argument("--data_dir", type=str, default="/data/TVQA_uncompressed", help="data dir path")
+    parser.add_argument("--frm_dir", type=str, default="/data/TVQA_uncompressed/frames_hq",
                         help="video frame dir path, the program will use provided cache if it exists. "
                              "Only used to get number of extracted frames for each video.")
+    parser.add_argument("--save_dir", type=str, default="/home/ajseo/TVQA/data")
     args = parser.parse_args()
 
     data_dir = args.data_dir
+    save_dir = args.save_dir
     sub_dir = os.path.join(data_dir, "tvqa_subtitles")
     raw_qa_files = glob.glob(os.path.join(data_dir, "tvqa_qa_release", "*jsonl"))
-    sub_cache_path = os.path.join(data_dir, "srt_data_cache.json")
-    frm_cnt_cache_path = os.path.join(data_dir, "frm_cnt_cache.json")
+    sub_cache_path = os.path.join(save_dir, "srt_data_cache.json")
+    frm_cnt_cache_path = os.path.join(save_dir, "frm_cnt_cache.json")
     srt_data = load_srt(sub_dir, sub_cache_path)
     srt_data = tokenize_srt(srt_data)
 
     for i, qa_file in enumerate(raw_qa_files):
         print("-"*60)
         print("Processing %s" % qa_file)
-        processed_qa_path = os.path.join(data_dir, os.path.split(qa_file)[1].replace(".jsonl", "_processed.json"))
+        processed_qa_path = os.path.join(save_dir, os.path.split(qa_file)[1].replace(".jsonl", "_processed.json"))
         process_qa(qa_file, srt_data, args.frm_dir, frm_cnt_cache_path, processed_qa_path)

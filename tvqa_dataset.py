@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 from tqdm import tqdm
 from utils import load_pickle, save_pickle, load_json, files_exist
+from pytorch_pretrained_bert import BertTokenizer, BertModel
 
 
 class TVQADataset(Dataset):
@@ -25,14 +26,10 @@ class TVQADataset(Dataset):
         self.mode = mode
         self.cur_data_dict = self.get_cur_dict()
 
-        # set word embedding / vocabulary
-        self.word2idx_path = opt.word2idx_path
-        self.idx2word_path = opt.idx2word_path
-        self.vocab_embedding_path = opt.vocab_embedding_path
-        self.embedding_dim = opt.embedding_size
-        self.word2idx = {"<pad>": 0, "<unk>": 1, "<eos>": 2}
-        self.idx2word = {0: "<pad>", 1: "<unk>", 2: "<eos>"}
-        self.offset = len(self.word2idx)
+        # set BERT embedding
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.model = BertModel.from_pretrained('bert-base-uncased')
+        self.model.eval()
 
         # set entry keys
         if self.with_ts:
@@ -48,16 +45,6 @@ class TVQADataset(Dataset):
             if k == "vcpt":
                 continue
             assert k in self.raw_valid[0].keys()
-
-        # build/load vocabulary
-        if not files_exist([self.word2idx_path, self.idx2word_path, self.vocab_embedding_path]):
-            print("\nNo cache founded.")
-            self.build_word_vocabulary(word_count_threshold=opt.word_count_threshold)
-        else:
-            print("\nLoading cache ...")
-            self.word2idx = load_pickle(self.word2idx_path)
-            self.idx2word = load_pickle(self.idx2word_path)
-            self.vocab_embedding = load_pickle(self.vocab_embedding_path)
 
     def set_mode(self, mode):
         self.mode = mode
@@ -82,15 +69,18 @@ class TVQADataset(Dataset):
 
         # add text keys
         for k in self.text_keys:
-            items.append(self.numericalize(self.cur_data_dict[index][k]))
+            # items.append(self.numericalize(self.cur_data_dict[index][k]))
+            items.append(self.embedding_BERT(self.cur_data_dict[index][k]))
 
-        # add vcpt
-        if self.with_ts:
-            cur_vis_sen = self.vcpt_dict[cur_vid_name][cur_start:cur_end + 1]
-        else:
-            cur_vis_sen = self.vcpt_dict[cur_vid_name]
-        cur_vis_sen = " , ".join(cur_vis_sen)
-        items.append(self.numericalize_vcpt(cur_vis_sen))
+        ########### vcpt embedding?? ###########
+
+        # # add vcpt
+        # if self.with_ts:
+        #     cur_vis_sen = self.vcpt_dict[cur_vid_name][cur_start:cur_end + 1]
+        # else:
+        #     cur_vis_sen = self.vcpt_dict[cur_vid_name]
+        # cur_vis_sen = " , ".join(cur_vis_sen)
+        # items.append(self.numericalize_vcpt(cur_vis_sen))
 
         # add other keys
         if self.mode == 'test':
@@ -114,89 +104,45 @@ class TVQADataset(Dataset):
         items.append(cur_vid_feat)
         return items
 
-    @classmethod
-    def line_to_words(cls, line, eos=True, downcase=True):
-        eos_word = "<eos>"
-        words = line.lower().split() if downcase else line.split()
-        # !!!! remove comma here, since they are too many of them
-        words = [w for w in words if w != ","]
-        words = words + [eos_word] if eos else words
-        return words
+    # ########### vcpt embedding change ??? ##############
+    # def numericalize_vcpt(self, vcpt_sentence):
+    #     """convert words to indices, additionally removes duplicated attr-object pairs"""
+    #     attr_obj_pairs = vcpt_sentence.lower().split(",")  # comma is also removed
+    #     unique_pairs = []
+    #     for pair in attr_obj_pairs:
+    #         if pair not in unique_pairs:
+    #             unique_pairs.append(pair)
+    #     words = []
+    #     for pair in unique_pairs:
+    #         words.extend(pair.split())
+    #     words.append("<eos>")
+    #     sentence_indices = [self.word2idx[w] if w in self.word2idx else self.word2idx["<unk>"]
+    #                         for w in words]
+    #     return sentence_indices
 
-    def numericalize(self, sentence, eos=True):
-        """convert words to indices"""
-        sentence_indices = [self.word2idx[w] if w in self.word2idx else self.word2idx["<unk>"]
-                            for w in self.line_to_words(sentence, eos=eos)]  # 1 is <unk>, unknown
-        return sentence_indices
+    def embedding_BERT(self, text):
+        tokenized_text = self.tokenizer.tokenize(text)
+        indexed_tokens = self.tokenizer.convert_tokens_to_ids(tokenized_text)
 
-    def numericalize_vcpt(self, vcpt_sentence):
-        """convert words to indices, additionally removes duplicated attr-object pairs"""
-        attr_obj_pairs = vcpt_sentence.lower().split(",")  # comma is also removed
-        unique_pairs = []
-        for pair in attr_obj_pairs:
-            if pair not in unique_pairs:
-                unique_pairs.append(pair)
-        words = []
-        for pair in unique_pairs:
-            words.extend(pair.split())
-        words.append("<eos>")
-        sentence_indices = [self.word2idx[w] if w in self.word2idx else self.word2idx["<unk>"]
-                            for w in words]
-        return sentence_indices
+        segments_ids = []
+        sentence_idx = 0
+        for token in tokenized_text:
+            segments_ids.append(sentence_idx)
+            if token == '.' or token == '?' or token == '!':
+                sentence_idx += 1
 
-    @classmethod
-    def load_glove(cls, filename):
-        """ Load glove embeddings into a python dict
-        returns { word (str) : vector_embedding (torch.FloatTensor) }"""
-        glove = {}
-        with open(filename) as f:
-            for line in f.readlines():
-                values = line.strip("\n").split(" ")  # space separator
-                word = values[0]
-                vector = np.asarray([float(e) for e in values[1:]])
-                glove[word] = vector
-        return glove
+        tokens_tensor = torch.tensor([indexed_tokens])
+        segments_tensors = torch.tensor([segments_ids])
 
-    def build_word_vocabulary(self, word_count_threshold=0):
-        """borrowed this implementation from @karpathy's neuraltalk."""
-        print("Building word vocabulary starts.\n")
-        all_sentences = []
-        for k in self.text_keys:
-            all_sentences.extend([ele[k] for ele in self.raw_train])
+        encoded_layers, _ = self.model(tokens_tensor, segments_tensors)
+        ########### how to sum? many BERT result matrix ###########
+        # 12 len list, [1, sentence_len, 768]
+        sentence_len = len(segments_ids)
+        layer_sum = torch.zeros([1, len(segments_ids), 768])
+        for layer in encoded_layers:
+            layer_sum += layer
 
-        word_counts = {}
-        for sentence in all_sentences:
-            for w in self.line_to_words(sentence, eos=False, downcase=True):
-                word_counts[w] = word_counts.get(w, 0) + 1
-
-        vocab = [w for w in word_counts if word_counts[w] >= word_count_threshold and w not in self.word2idx.keys()]
-        print("Vocabulary Size %d (<pad> <unk> <eos> excluded) using word_count_threshold %d.\n" %
-              (len(vocab), word_count_threshold))
-
-        # build index and vocabularies
-        for idx, w in enumerate(vocab):
-            self.word2idx[w] = idx + self.offset
-            self.idx2word[idx + self.offset] = w
-        print("word2idx size: %d, idx2word size: %d.\n" % (len(self.word2idx), len(self.idx2word)))
-
-        # Make glove embedding.
-        print("Loading glove embedding at path : %s. \n" % self.glove_embedding_path)
-        glove_full = self.load_glove(self.glove_embedding_path)
-        print("Glove Loaded, building word2idx, idx2word mapping. This may take a while.\n")
-        glove_matrix = np.zeros([len(self.idx2word), self.embedding_dim])
-        glove_keys = glove_full.keys()
-        for i in tqdm(range(len(self.idx2word))):
-            w = self.idx2word[i]
-            w_embed = glove_full[w] if w in glove_keys else np.random.randn(self.embedding_dim) * 0.4
-            glove_matrix[i, :] = w_embed
-        self.vocab_embedding = glove_matrix
-        print("Vocab embedding size is :", glove_matrix.shape)
-
-        print("Saving cache files ...\n")
-        save_pickle(self.word2idx, self.word2idx_path)
-        save_pickle(self.idx2word, self.idx2word_path)
-        save_pickle(glove_matrix, self.vocab_embedding_path)
-        print("Building  vocabulary done.\n")
+        return layer_sum/sentence_len
 
 
 class Batch(object):
@@ -215,15 +161,7 @@ class Batch(object):
 
 def pad_collate(data):
     """Creates mini-batch tensors from the list of tuples (src_seq, trg_seq)."""
-    def pad_sequences(sequences):
-        sequences = [torch.LongTensor(s) for s in sequences]
-        lengths = torch.LongTensor([len(seq) for seq in sequences])
-        padded_seqs = torch.zeros(len(sequences), max(lengths)).long()
-        for idx, seq in enumerate(sequences):
-            end = lengths[idx]
-            padded_seqs[idx, :end] = seq[:end]
-        return padded_seqs, lengths
-
+    # padding
     def pad_video_sequences(sequences):
         """sequences is a list of torch float tensors (created from numpy)"""
         lengths = torch.LongTensor([len(seq) for seq in sequences])
@@ -235,23 +173,23 @@ def pad_collate(data):
         return padded_seqs, lengths
 
     # separate source and target sequences
-    column_data = zip(*data)
-    text_keys = ["q", "a0", "a1", "a2", "a3", "a4", "sub", "vcpt"]
+    column_data = list(zip(*data))
+    text_keys = ["q", "a0", "a1", "a2", "a3", "a4", "sub"] #, "vcpt"
     label_key = "answer_idx"
     qid_key = "qid"
-    vid_name_key = "vid_name"
-    vid_feat_key = "vid"
-    all_keys = text_keys + [label_key, qid_key, vid_name_key, vid_feat_key]
+    # vid_name_key = "vid_name"
+    # vid_feat_key = "vid"
+    all_keys = text_keys + [label_key, qid_key]
     all_values = []
     for i, k in enumerate(all_keys):
         if k in text_keys:
-            all_values.append(pad_sequences(column_data[i]))
+            all_values.append(column_data[i])
         elif k == label_key:
             all_values.append(torch.LongTensor(column_data[i]))
-        elif k == vid_feat_key:
-            all_values.append(pad_video_sequences(column_data[i]))
-        else:
-            all_values.append(column_data[i])
+        # elif k == vid_feat_key:
+        #     all_values.append(pad_video_sequences(column_data[i]))
+        # else:
+        #     all_values.append(column_data[i])
 
     batched_data = Batch.get_batch(keys=all_keys, values=all_values)
     return batched_data
@@ -290,10 +228,15 @@ if __name__ == "__main__":
     opt = BaseOptions().parse()
 
     dset = TVQADataset(opt, mode="valid")
-    data_loader = DataLoader(dset, batch_size=10, shuffle=False, collate_fn=pad_collate)
+    print(dset.__getitem__(100))
+
+    data_loader = DataLoader(dset, batch_size=5, shuffle=False, collate_fn=pad_collate)
 
     for batch_idx, batch in enumerate(data_loader):
-        model_inputs, targets, qids = preprocess_inputs(batch, opt.max_sub_l, opt.max_vcpt_l, opt.max_vid_l)
+        print(batch)
+        # model_inputs, targets, qids = preprocess_inputs(batch, opt.max_sub_l, opt.max_vcpt_l, opt.max_vid_l)
+        # print(model_inputs, targets, qids)
         break
 
-
+# Todo: embedding단에서 runtime error: index out of range(index 접근 잘못?)
+# get_item은 실행됨, pad_collate단에서 error

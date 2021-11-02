@@ -40,13 +40,13 @@ class BidafAttn(nn.Module):
         elif self.method == "dot":
             s = torch.bmm(s1, s2.transpose(1, 2))
 
-        s_mask = s.data.new(*s.size()).fill_(1).byte()  # [B, T1, T2]
+        s_mask = s.data.new(*s.size()).fill_(1).bool()  # [B, T1, T2]
         # Init similarity mask using lengths
         for i, (l_1, l_2) in enumerate(zip(l1, l2)):
             s_mask[i][:l_1, :l_2] = 0
 
         s_mask = Variable(s_mask)
-        s.data.masked_fill_(s_mask.data.byte(), -float("inf"))
+        s.data.masked_fill_(s_mask.data, -float("inf"))
         return s
 
     @classmethod
