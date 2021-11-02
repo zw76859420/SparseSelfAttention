@@ -1,4 +1,4 @@
-Sparse Attention Mechanism for VideoQA
+Sparse Self-Attention Mechanism for VideoQA
 ========================================================================
 
 Pytorch Implementation for the paper:
